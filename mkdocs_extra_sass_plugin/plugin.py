@@ -2,13 +2,12 @@ import io
 import logging
 import os
 from abc import ABC
+from typing import Type, TypeVar, Dict, Any
 from tempfile import NamedTemporaryFile
-from typing import Type, TypeVar
-
 import sass
 from bs4 import BeautifulSoup
 from livereload import Server
-from mkdocs.config import Config
+from mkdocs.config import Config, config_options
 from mkdocs.plugins import BasePlugin
 from mkdocs.structure.pages import Page
 from mkdocs.utils import normalize_url
@@ -22,10 +21,14 @@ _logger = logging.getLogger('mkdocs.extra-sass')
 class ExtraSassPlugin(BasePlugin):
     """Extra Sass Plugin"""
 
+    config_scheme = (
+        ("randomize_output", config_options.Type(bool, default=False)),
+    )
+
     def __init__(self):
         self.__entry_point = None
 
-    def on_config(self, config: Config):
+    def on_config(self, config: Config) -> Dict[str, Any]:
         self.__entry_point = None
 
     def on_serve(self, server: Server, config: Config, builder, **kwargs):
@@ -66,7 +69,7 @@ class ExtraSassPlugin(BasePlugin):
         return self.__entry_point
 
     def _build_entry(self, config: Config) -> _T_SassEntry:
-        entry_point = _SassEntry.search_entry_point()
+        entry_point = _SassEntry.search_entry_point(self.config['randomize_output'])
         if entry_point.is_available:
             try:
                 site_dir = config["site_dir"]
@@ -97,13 +100,13 @@ class _SassEntry(ABC):
     ]
 
     @classmethod
-    def search_entry_point(cls: Type[_T_SassEntry]) -> _T_SassEntry:
+    def search_entry_point(cls: Type[_T_SassEntry], randomize: bool = False) -> _T_SassEntry:
         d = cls._styles_dir
         if os.path.isdir(d):
             for f in cls._style_filenames:
                 path = os.path.join(d, f)
                 if path and os.path.isfile(path):
-                    return _AvailableSassEntry(d, f)
+                    return _AvailableSassEntry(d, f, randomize)
         return _NoSassEntry()
 
     @property
@@ -127,9 +130,10 @@ class _NoSassEntry(_SassEntry):
 
 class _AvailableSassEntry(_SassEntry):
 
-    def __init__(self, dirname: str, filename: str):
+    def __init__(self, dirname: str, filename: str, randomize: bool = False):
         self._dirname = dirname
         self._filename = filename
+        self._randomize = randomize
 
         self._relative_path = None
 
@@ -159,39 +163,43 @@ class _AvailableSassEntry(_SassEntry):
 
         output_dir = os.path.join(site_dir, dest_dir)
         os.makedirs(output_dir, exist_ok=True)
-
-        with NamedTemporaryFile(
-            prefix='extra-style.',
-            suffix='.min.css',
-            dir=output_dir,
-            delete=False,
-            mode='w',
-            encoding='utf-8',
-            newline=''
-        ) as css_file:
-            fix_umask(css_file)
-
-            _, filename = os.path.split(css_file.name)
-            source_map_filename = filename + '.map'
-
-            css, source_map = sass.compile(
-                filename=source_path,
-                output_style='compressed',
-                source_map_filename=source_map_filename,
-                source_map_contents=True,
-                omit_source_map_url=False,
-                output_filename_hint=filename
+        if self._randomize:
+            css_file = NamedTemporaryFile(
+                prefix='extra-style.',
+                suffix='.min.css',
+                dir=output_dir,
+                delete=False,
+                mode='w',
+                encoding='utf-8',
+                newline=''
             )
+        else:
+            css_file = open(os.path.join(output_dir, 'extra-style.min.css'), 'w')
 
-            css_file.write(css)
+        fix_umask(css_file)
 
-            map_file = os.path.join(output_dir, source_map_filename)
-            with io.open(map_file, 'w', encoding='utf-8', newline='') as f:
-                f.write(source_map)
+        _, filename = os.path.split(css_file.name)
+        source_map_filename = filename + '.map'
 
-            self._relative_path = os.path.join(dest_dir, filename)
+        css, source_map = sass.compile(
+            filename=source_path,
+            output_style='compressed',
+            source_map_filename=source_map_filename,
+            source_map_contents=True,
+            omit_source_map_url=False,
+            output_filename_hint=filename
+        )
 
-            return {
-                'src': source_path,
-                'dst': self._relative_path
-            }
+        css_file.write(css)
+        css_file.close()
+
+        map_file = os.path.join(output_dir, source_map_filename)
+        with io.open(map_file, 'w', encoding='utf-8', newline='') as f:
+            f.write(source_map)
+
+        self._relative_path = os.path.join(dest_dir, filename)
+
+        return {
+            'src': source_path,
+            'dst': self._relative_path
+        }

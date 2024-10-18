@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "mkdocs-extra-sass-plugin"
 description = "Adds stylesheets to your mkdocs site from Sass/SCSS."
-version = "0.1.0"
+version = "0.1.1"
 authors = ["orzih <orzih@mail.com>"]
 license = "MIT"
 readme = "README.md"
